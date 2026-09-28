@@ -109,7 +109,7 @@ try:
         if foreign_oi is None:
             st.metric("外資期指淨未平倉", "資料讀取中", "")
         else:
-            if foreign_oi <= -30000:
+            if foreign_oi <= -90000:
                 oi_signal = "🔴 警戒 (重度避險)"
             elif foreign_oi < 0:
                 oi_signal = "🟡 偏空 (微幅避險)"
@@ -130,7 +130,7 @@ try:
     # === 第三區：核心警報器 ===
     if latest['Close'] < latest['60MA_Deduct']:
         st.error(f"🚨 **破線警報：** 目前指數 ({latest['Close']:,.0f}) 已低於季線扣抵值 ({latest['60MA_Deduct']:,.0f})。季線將加速下彎，請嚴格控管資金水位！")
-    elif foreign_oi is not None and foreign_oi <= -40000:
+    elif foreign_oi is not None and foreign_oi <= -90000:
         st.error(f"🚨 **籌碼警報：** 外資淨空單高達 {foreign_oi:,.0f} 口，機構法人正進行系統性避險，提防大崩跌！")
     else:
         st.success("✅ **安全區間：** 目前指數高於季線扣抵，且無極端異常籌碼，多方結構健康。")
