@@ -98,7 +98,6 @@ try:
     
     st.subheader(f"加權指數：{latest['Close']:,.0f}")
     
-    # === 第一區：技術面大盤結構 ===
     st.markdown("### 📈 技術面結構")
     s_bull = (latest['Close'] > latest['5MA']) and (latest['K'] > latest['D'])
     m_bull = (latest['Close'] > latest['60MA']) and (latest['Close'] > latest['60MA_Deduct'])
@@ -113,7 +112,6 @@ try:
 
     st.divider()
 
-    # === 第二區：籌碼與動能 ===
     st.markdown("### 💰 籌碼與資金動能")
     col4, col5 = st.columns(2)
     with col4:
@@ -129,7 +127,6 @@ try:
 
     st.divider()
     
-    # === 第三區：核心警報器 ===
     if latest['Close'] < latest['60MA_Deduct']:
         st.error(f"🚨 **破線警報：** 目前指數已低於季線扣抵值 ({latest['60MA_Deduct']:,.0f})。季線將加速下彎，請嚴格控管資金！")
     elif foreign_oi is not None and foreign_oi <= -90000:
@@ -141,7 +138,7 @@ except Exception as e:
     st.error(f"大盤資料讀取失敗，請確認網路狀態。({e})")
 
 # ==========================================
-#         個股健診 (第四區) 獨立於大盤錯誤之外
+#         個股健診 (第四區)
 # ==========================================
 st.divider()
 st.markdown("### 🏥 自選股即時健診")
@@ -157,14 +154,15 @@ if user_ticker:
                 stock_df.columns = stock_df.columns.get_level_values(0)
             
             if stock_df.empty:
-                st.warning(f"找不到代號 {user_ticker}，請確認是否輸入正確。")
+                st.warning(f"找不到代號 {user_ticker}，請確認是否輸入正確 (上櫃股票請手動輸入 {user_ticker}.TWO)。")
             else:
                 stock_df['5MA'] = stock_df['Close'].rolling(5).mean()
                 stock_df['60MA'] = stock_df['Close'].rolling(60).mean()
                 stock_df['60MA_Deduct'] = stock_df['Close'].shift(59)
                 
-                macd = stock_df['Close'].ewm(span=12, False).mean() - stock_df['Close'].ewm(span=26, False).mean()
-                stock_df['MACD_Hist'] = macd - macd.ewm(span=9, False).mean()
+                # 這裡已經把語法修正為 adjust=False
+                macd = stock_df['Close'].ewm(span=12, adjust=False).mean() - stock_df['Close'].ewm(span=26, adjust=False).mean()
+                stock_df['MACD_Hist'] = macd - macd.ewm(span=9, adjust=False).mean()
                 
                 latest_s = stock_df.iloc[-1]
                 st.markdown(f"**最新收盤價：{latest_s['Close']:,.1f}**")
