@@ -55,27 +55,47 @@ def get_market_data():
 
 @st.cache_data(ttl=3600)
 def get_foreign_oi():
-    """透過 FinMind API 抓取外資台指期未平倉"""
+    """透過 FinMind API 抓取外資台指期未平倉 (除錯進化版)"""
     
-    # 這裡填入你剛剛免費申請的 API Token
+    # 這裡填入你的 API Token
     FINMIND_TOKEN = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiY29rZXJudXQwNUBnbWFpbC5jb20iLCJlbWFpbCI6ImNva2VybnV0MDVAZ21haWwuY29tIiwidG9rZW5fdmVyc2lvbiI6MH0.GlzIUeSky4e4XeYhcaK5XoT4nwj1n3Wk_GSwhHyBHnc'
     
     try:
         start_date = (datetime.datetime.now() - datetime.timedelta(days=15)).strftime('%Y-%m-%d')
-        
-        # 網址後面加上 &token= 參數，享有專屬穩定連線
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanFuturesInstitutionalInvestors&data_id=TX&start_date={start_date}&token={FINMIND_TOKEN}"
         
         res = requests.get(url, timeout=5)
         data = res.json()
         
-        if data.get('msg') == 'success':
-            df = pd.DataFrame(data['data'])
-            df_foreign = df[df['name'] == '外資及陸資']
-            latest_oi = df_foreign.iloc[-1]['NetOpenInterest']
-            return int(latest_oi)
-        return None
-    except:
+        # 診斷 1：檢查連線與金鑰狀態。如果有錯，直接在網頁亮紅燈！
+        if data.get('msg') != 'success':
+            st.error(f"🚨 FinMind 連線失敗！官方回報原因：{data.get('msg')}")
+            return None
+            
+        df = pd.DataFrame(data['data'])
+        
+        # 診斷 2：包容「外資」名稱變更
+        df_foreign = df[df['name'].str.contains('外資', na=False)]
+        if len(df_foreign) == 0:
+            st.error("🚨 連線成功，但資料表中找不到『外資』的關鍵字。")
+            return None
+            
+        last_row = df_foreign.iloc[-1]
+        
+        # 診斷 3：自動適應 FinMind 各種可能的「未平倉」欄位命名
+        if 'open_interest_net_volume' in df.columns:
+            return int(last_row['open_interest_net_volume'])
+        elif 'NetOpenInterest' in df.columns:
+            return int(last_row['NetOpenInterest'])
+        elif 'long_open_interest' in df.columns and 'short_open_interest' in df.columns:
+            return int(last_row['long_open_interest'] - last_row['short_open_interest'])
+        else:
+            # 如果欄位全都對不上，把現有欄位全部印出來給我們看！
+            st.error(f"🚨 找不到未平倉欄位！目前 FinMind 提供的欄位有：{', '.join(df.columns)}")
+            return None
+            
+    except Exception as e:
+        st.error(f"🚨 系統發生預期外錯誤：{e}")
         return None
 
 try:
