@@ -63,7 +63,7 @@ try:
     mid_bull = (latest['Close'] > latest['60MA']) and (latest['Close'] > latest['60MA_Deduct'])
     mid_signal = "🟢 季線上彎 (多頭)" if mid_bull else "🔴 季線下彎 (空頭)"
     
-    macd_signal = "🟢 紅柱擴大 (動能強)" if latest['MACD_Hist'] > 0 else "🔴 綠柱擴大 (動能弱)"
+    macd_signal = "🟢 動能強勢" if latest['MACD_Hist'] > 0 else "🔴 動能弱勢"
 
     # --- 視覺化卡片呈現 ---
     col1, col2, col3 = st.columns(3)
