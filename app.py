@@ -9,10 +9,12 @@ st.title("📊 台股多空趨勢戰情室")
 st.markdown(
     """
     <style>
-    /* 強制讓 Metric 的文字自動換行且不截斷 */
-    [data-testid="stMetricValue"] {
+    /* 強制讓 Metric 的所有內外層文字自動換行 */
+    [data-testid="stMetricValue"], 
+    [data-testid="stMetricValue"] > div {
         white-space: normal !important;
-        font-size: 24px !important; 
+        word-break: break-word !important;
+        font-size: 22px !important; 
     }
     </style>
     """,
