@@ -208,6 +208,9 @@ try:
 except Exception as e:
     st.error(f"資料讀取失敗，請確認網路狀態。({e})")
 
+
+
+    
 # === 第四區：個股即時健診區 ===
     st.divider()
     st.markdown("### 🏥 自選股即時健診")
