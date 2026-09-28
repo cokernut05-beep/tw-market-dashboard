@@ -55,7 +55,7 @@ def get_market_data():
 
 @st.cache_data(ttl=3600)
 def get_foreign_oi():
-    """透過 FinMind API 抓取外資台指期未平倉 (終極防護版)"""
+    """透過 FinMind API 抓取外資台指期未平倉 (最終破解版)"""
     
     # 這裡填入你的 API Token
     FINMIND_TOKEN = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiY29rZXJudXQwNUBnbWFpbC5jb20iLCJlbWFpbCI6ImNva2VybnV0MDVAZ21haWwuY29tIiwidG9rZW5fdmVyc2lvbiI6MH0.GlzIUeSky4e4XeYhcaK5XoT4nwj1n3Wk_GSwhHyBHnc'
@@ -67,31 +67,37 @@ def get_foreign_oi():
         res = requests.get(url, timeout=5)
         data = res.json()
         
-        # 1. 檢查官方回傳狀態
         if data.get('msg') != 'success':
-            st.error(f"🚨 連線失敗！官方回報：{data.get('msg')}")
             return None
             
         raw_data = data.get('data', [])
-        
-        # 2. 防呆機制：如果回傳的是空資料
         if not raw_data or len(raw_data) == 0:
-            st.error("🚨 連線成功，但 FinMind 系統回傳了「空資料」。(可能剛好遇到官方主機維護中)")
             return None
             
         df = pd.DataFrame(raw_data)
         
-        # 3. 智慧尋找包含「外資」字眼的欄位 (不怕官方改名)
+        # 1. 抓出外資的資料 (對應新欄位 institutional_investors)
         investor_col = None
         for col in df.columns:
-            # 檢查該欄位中是否含有「外資」兩個字
             if df[col].astype(str).str.contains('外資').any():
                 investor_col = col
                 break
                 
         if not investor_col:
-            st.error(f"🚨 找不到法人的欄位！目前抓到的欄位有：{', '.join(df.columns)}")
             return None
+            
+        df_foreign = df[df[investor_col].str.contains('外資', na=False)]
+        last_row = df_foreign.iloc[-1]
+        
+        # 2. 根據最新的欄位名稱，自己計算「淨未平倉口數」(多方 - 空方)
+        long_oi = last_row.get('long_open_interest_balance_volume', 0)
+        short_oi = last_row.get('short_open_interest_balance_volume', 0)
+        
+        net_oi = int(long_oi) - int(short_oi)
+        return net_oi
+            
+    except Exception as e:
+        return None
             
         # 取出外資的資料
         df_foreign = df[df[investor_col].str.contains('外資', na=False)]
