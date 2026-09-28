@@ -207,3 +207,62 @@ try:
 
 except Exception as e:
     st.error(f"資料讀取失敗，請確認網路狀態。({e})")
+
+# === 第四區：個股即時健診區 ===
+    st.divider()
+    st.markdown("### 🏥 自選股即時健診")
+    
+    # 使用者輸入股票代號 (預設為 2330 台積電)
+    user_ticker = st.text_input("請輸入台股代號 (如 2330)：", "2330")
+    
+    if user_ticker:
+        # 自動補上 .TW (Yahoo 財經的台股後綴)
+        ticker_symbol = f"{user_ticker}.TW"
+        
+        try:
+            with st.spinner(f"正在診斷 {user_ticker} 中..."):
+                # 抓取該個股歷史資料
+                stock_df = yf.download(ticker_symbol, period="1y", progress=False)
+                if isinstance(stock_df.columns, pd.MultiIndex):
+                    stock_df.columns = stock_df.columns.get_level_values(0)
+                
+                if stock_df.empty:
+                    st.warning(f"找不到代號 {user_ticker}，請確認是否輸入正確 (上櫃股票請手動輸入 {user_ticker}.TWO)")
+                else:
+                    # 計算該股技術指標
+                    stock_df['5MA'] = stock_df['Close'].rolling(5).mean()
+                    stock_df['60MA'] = stock_df['Close'].rolling(60).mean()
+                    stock_df['60MA_Deduct'] = stock_df['Close'].shift(59)
+                    
+                    exp1 = stock_df['Close'].ewm(span=12, adjust=False).mean()
+                    exp2 = stock_df['Close'].ewm(span=26, adjust=False).mean()
+                    macd = exp1 - exp2
+                    signal = macd.ewm(span=9, adjust=False).mean()
+                    macd_hist = macd - signal
+                    stock_df['MACD_Hist'] = macd_hist
+                    
+                    stock_latest = stock_df.iloc[-1]
+                    
+                    st.markdown(f"**最新收盤價：{stock_latest['Close']:,.1f}**")
+                    
+                    # 診斷邏輯與燈號
+                    s_short = "🟢 短線偏多" if stock_latest['Close'] > stock_latest['5MA'] else "🔴 短線偏空"
+                    s_mid = "🟢 季線上彎" if (stock_latest['Close'] > stock_latest['60MA']) and (stock_latest['Close'] > stock_latest['60MA_Deduct']) else "🔴 季線下彎"
+                    s_macd = "🟢 動能轉強" if stock_latest['MACD_Hist'] > 0 else "🔴 動能轉弱"
+                    
+                    col_s1, col_s2, col_s3 = st.columns(3)
+                    with col_s1:
+                        st.metric("5日均線", s_short, f"{stock_latest['5MA']:.1f}")
+                    with col_s2:
+                        st.metric("季線扣抵", s_mid, f"{stock_latest['60MA_Deduct']:.1f}")
+                    with col_s3:
+                        st.metric("MACD柱狀", s_macd, f"{stock_latest['MACD_Hist']:.2f}")
+                        
+                    # 個股破線警告
+                    if stock_latest['Close'] < stock_latest['60MA_Deduct']:
+                        st.error(f"⚠️ 注意：目前股價低於 60 天前的扣抵值，季線反壓形成，請謹慎評估多單風險。")
+                    else:
+                        st.success(f"✅ 股價高於季線扣抵，中長線具備支撐保護。")
+
+        except Exception as e:
+            st.error("個股資料讀取失敗，請確認代號是否正確。")
