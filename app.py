@@ -6,6 +6,18 @@ import datetime
 st.set_page_config(page_title="台股多空戰情室", page_icon="📊", layout="centered")
 st.title("📊 台股多空趨勢戰情室")
 
+st.markdown(
+    """
+    <style>
+    /* 強制讓 Metric 的文字自動換行且不截斷 */
+    [data-testid="stMetricValue"] {
+        white-space: normal !important;
+        font-size: 24px !important; 
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 @st.cache_data(ttl=3600)
 def get_market_data():
     # 抓取台股大盤資料 (^TWII)
