@@ -56,12 +56,19 @@ def get_market_data():
 @st.cache_data(ttl=3600)
 def get_foreign_oi():
     """透過 FinMind API 抓取外資台指期未平倉"""
+    
+    # 這裡填入你剛剛免費申請的 API Token
+    FINMIND_TOKEN = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiY29rZXJudXQwNUBnbWFpbC5jb20iLCJlbWFpbCI6ImNva2VybnV0MDVAZ21haWwuY29tIiwidG9rZW5fdmVyc2lvbiI6MH0.GlzIUeSky4e4XeYhcaK5XoT4nwj1n3Wk_GSwhHyBHnc'
+    
     try:
-        # 抓取過去 15 天的資料以確保能取到最新交易日
         start_date = (datetime.datetime.now() - datetime.timedelta(days=15)).strftime('%Y-%m-%d')
-        url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanFuturesInstitutionalInvestors&data_id=TX&start_date={start_date}"
+        
+        # 網址後面加上 &token= 參數，享有專屬穩定連線
+        url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanFuturesInstitutionalInvestors&data_id=TX&start_date={start_date}&token={FINMIND_TOKEN}"
+        
         res = requests.get(url, timeout=5)
         data = res.json()
+        
         if data.get('msg') == 'success':
             df = pd.DataFrame(data['data'])
             df_foreign = df[df['name'] == '外資及陸資']
