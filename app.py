@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import requests
 import datetime
+import re
 
 st.set_page_config(page_title="台股多空戰情室", page_icon="📊", layout="centered")
 
@@ -137,34 +138,66 @@ try:
 except Exception as e:
     st.error(f"大盤資料讀取失敗，請確認網路狀態。({e})")
 
+
 # ==========================================
-#         個股健診 (第四區)
+#         個股健診 (第四區 - 具備中文名功能)
 # ==========================================
 st.divider()
 st.markdown("### 🏥 自選股即時健診")
 
-user_ticker = st.text_input("請輸入台股代號 (如 2330)：", "2330")
-
-if user_ticker:
-    ticker_symbol = f"{user_ticker}.TW"
+@st.cache_data(ttl=86400)  # 中文名稱記住一天，加快查詢速度
+def get_stock_name(ticker):
+    """去 Yahoo 財經抓取中文股票名稱"""
     try:
-        with st.spinner(f"正在診斷 {user_ticker} 中..."):
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(f"https://tw.stock.yahoo.com/quote/{ticker}", headers=headers, timeout=3)
+        match = re.search(r'<title>(.*?)\(', res.text)
+        if match:
+            return match.group(1).strip()
+    except:
+        pass
+    return ticker
+
+user_input = st.text_input("請輸入台股代號 (如 2330)：", "2330")
+user_input = user_input.strip().upper()
+
+if user_input:
+    # 自動分辨上市或上櫃後綴
+    if ".TWO" in user_input:
+        ticker_symbol = user_input
+        clean_ticker = user_input.replace(".TWO", "")
+    elif ".TW" in user_input:
+        ticker_symbol = user_input
+        clean_ticker = user_input.replace(".TW", "")
+    else:
+        ticker_symbol = f"{user_input}.TW"
+        clean_ticker = user_input
+        
+    try:
+        # 第一步：先去抓中文名稱
+        stock_name = get_stock_name(clean_ticker)
+        
+        with st.spinner(f"正在診斷 {stock_name} ({clean_ticker}) 中..."):
+            # 第二步：抓取歷史股價
             stock_df = yf.download(ticker_symbol, period="1y", progress=False)
             if isinstance(stock_df.columns, pd.MultiIndex):
                 stock_df.columns = stock_df.columns.get_level_values(0)
             
             if stock_df.empty:
-                st.warning(f"找不到代號 {user_ticker}，請確認是否輸入正確 (上櫃股票請手動輸入 {user_ticker}.TWO)。")
+                st.warning(f"找不到代號 {user_input}，請確認是否輸入正確 (若是上櫃股票，請輸入 代號.TWO，如 8069.TWO)。")
             else:
+                # 第三步：計算技術指標
                 stock_df['5MA'] = stock_df['Close'].rolling(5).mean()
                 stock_df['60MA'] = stock_df['Close'].rolling(60).mean()
                 stock_df['60MA_Deduct'] = stock_df['Close'].shift(59)
                 
-                # 這裡已經把語法修正為 adjust=False
                 macd = stock_df['Close'].ewm(span=12, adjust=False).mean() - stock_df['Close'].ewm(span=26, adjust=False).mean()
                 stock_df['MACD_Hist'] = macd - macd.ewm(span=9, adjust=False).mean()
                 
                 latest_s = stock_df.iloc[-1]
+                
+                # 漂亮地印出「中文名稱 (代號)」與收盤價
+                st.markdown(f"#### {stock_name} ({clean_ticker})")
                 st.markdown(f"**最新收盤價：{latest_s['Close']:,.1f}**")
                 
                 c1, c2, c3 = st.columns(3)
@@ -176,4 +209,4 @@ if user_ticker:
                     st.metric("MACD動能", "🟢 轉強" if latest_s['MACD_Hist'] > 0 else "🔴 轉弱", f"{latest_s['MACD_Hist']:.2f}")
                     
     except Exception as e:
-        st.error("個股資料讀取失敗，請確認代號是否正確。")
+        st.error(f"個股資料讀取失敗，請確認代號是否正確。({e})")
