@@ -51,7 +51,7 @@ def get_stock_name(ticker):
         return ticker
 
 # 👇👇👇 請在這裡貼上你的 FinMind Token 👇👇👇
-FINMIND_TOKEN = '貼上你的_FINMIND_TOKEN'
+FINMIND_TOKEN = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiY29rZXJudXQwNUBnbWFpbC5jb20iLCJlbWFpbCI6ImNva2VybnV0MDVAZ21haWwuY29tIiwidG9rZW5fdmVyc2lvbiI6MH0.GlzIUeSky4e4XeYhcaK5XoT4nwj1n3Wk_GSwhHyBHnc'
 
 @st.cache_data(ttl=3600)
 def get_foreign_oi():
