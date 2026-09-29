@@ -7,7 +7,7 @@ import re
 import plotly.graph_objects as go
 from bs4 import BeautifulSoup
 
-st.set_page_config(page_title="台股多空戰情室 4.0", page_icon="📊", layout="centered")
+st.set_page_config(page_title="台股多空戰情室", page_icon="📊", layout="centered")
 
 st.markdown(
     """
@@ -22,7 +22,7 @@ st.markdown(
     """, unsafe_allow_html=True
 )
 
-st.title("📊 台股多空戰情室 4.0")
+st.title("📊 台股多空戰情室")
 
 # ==========================================
 #         通用資料函數
@@ -85,7 +85,6 @@ def get_stock_chips(ticker):
         f_df = df_latest[df_latest['name'].str.contains('外資', na=False)]
         t_df = df_latest[df_latest['name'].str.contains('投信', na=False)]
         
-        # 買賣股數相減後除以 1000 變成「張數」
         f_net = (f_df['buy'].sum() - f_df['sell'].sum()) // 1000 if not f_df.empty else 0
         t_net = (t_df['buy'].sum() - t_df['sell'].sum()) // 1000 if not t_df.empty else 0
         return {"date": latest_date, "foreign": f_net, "trust": t_net}
@@ -108,6 +107,25 @@ def get_yahoo_ranking(url):
         return "\n".join(result)
     except: return "讀取失敗"
 
+# 🌟 智慧識別引擎：自動判斷上市或上櫃
+@st.cache_data(ttl=3600)
+def get_stock_data_auto(ticker, period="6mo"):
+    clean_ticker = ticker.replace(".TWO", "").replace(".TW", "").strip()
+    
+    # 嘗試 1：上市 (.TW)
+    df = yf.download(f"{clean_ticker}.TW", period=period, progress=False)
+    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+    if not df.empty and not df['Close'].isna().all():
+        return df
+        
+    # 嘗試 2：上櫃 (.TWO)
+    df = yf.download(f"{clean_ticker}.TWO", period=period, progress=False)
+    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+    if not df.empty and not df['Close'].isna().all():
+        return df
+        
+    return pd.DataFrame() # 都找不到回傳空表
+
 # ==========================================
 #         建立三個分頁
 # ==========================================
@@ -123,7 +141,6 @@ with tab1:
         
         st.subheader(f"加權指數：{latest['Close']:,.0f}")
         
-        # 技術面
         s_bull = (latest['Close'] > latest['5MA']) and (latest['K'] > latest['D'])
         m_bull = (latest['Close'] > latest['60MA']) and (latest['Close'] > latest['60MA_Deduct'])
         c1, c2, c3 = st.columns(3)
@@ -132,7 +149,6 @@ with tab1:
         c3.metric("波段(MACD)", "🟢 動能強勢" if latest['MACD_Hist'] > 0 else "🔴 動能弱勢", f"值: {latest['MACD']:.0f}")
 
         st.divider()
-        # 籌碼面
         c4, c5 = st.columns(2)
         if foreign_oi is None: c4.metric("外資期指淨未平倉", "讀取中")
         else: c4.metric("外資期指淨未平倉", "🔴 警戒" if foreign_oi <= -90000 else "🟡 偏空" if foreign_oi < 0 else "🟢 偏多", f"{foreign_oi:,.0f} 口")
@@ -143,7 +159,6 @@ with tab1:
         elif foreign_oi is not None and foreign_oi <= -90000: st.error(f"🚨 **籌碼警報：** 外資淨空單達 {foreign_oi:,.0f} 口，提防崩跌！")
         else: st.success("✅ **安全區間：** 大盤結構健康。")
         
-        # 盤中資金雷達
         st.markdown("### ⚡ 市場資金雷達 (Yahoo 即時)")
         r1, r2 = st.columns(2)
         with r1:
@@ -158,18 +173,18 @@ with tab1:
 
 # --- 分頁 2：個股深度健診 ---
 with tab2:
-    user_input = st.text_input("輸入一檔股票代號 (如 2317)：", "2330", key="single_stock").strip().upper()
+    # 現在不用提示要加 .TWO 了！
+    user_input = st.text_input("輸入股票代號 (如 2317 或 8358)：", "2330", key="single_stock").strip().upper()
     if user_input:
         clean_ticker = user_input.replace(".TWO", "").replace(".TW", "")
-        ticker_sym = user_input if ".TW" in user_input or ".TWO" in user_input else f"{user_input}.TW"
         
         try:
             name = get_stock_name(clean_ticker)
             with st.spinner(f"正在分析 {name}..."):
-                sdf = yf.download(ticker_sym, period="6mo", progress=False)
-                if isinstance(sdf.columns, pd.MultiIndex): sdf.columns = sdf.columns.get_level_values(0)
+                # 🌟 使用智慧識別引擎抓取資料
+                sdf = get_stock_data_auto(clean_ticker, period="6mo")
                 
-                if sdf.empty: st.warning("找不到資料，上櫃股請加上 .TWO")
+                if sdf.empty: st.warning(f"找不到代號 {clean_ticker} 的資料，請確認代號是否正確。")
                 else:
                     sdf['5MA'] = sdf['Close'].rolling(5).mean()
                     sdf['60MA'] = sdf['Close'].rolling(60).mean()
@@ -180,20 +195,17 @@ with tab2:
                     
                     st.markdown(f"#### {name} ({clean_ticker}) - 收盤：{ls['Close']:,.1f}")
                     
-                    # 互動 K 線圖 (Plotly)
                     fig = go.Figure(data=[go.Candlestick(x=sdf.index, open=sdf['Open'], high=sdf['High'], low=sdf['Low'], close=sdf['Close'], name='K線')])
                     fig.add_trace(go.Scatter(x=sdf.index, y=sdf['5MA'], line=dict(color='orange', width=1.5), name='5MA'))
                     fig.add_trace(go.Scatter(x=sdf.index, y=sdf['60MA'], line=dict(color='blue', width=1.5), name='季線'))
                     fig.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=10, b=0), height=300)
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    # 技術燈號
                     sc1, sc2, sc3 = st.columns(3)
                     sc1.metric("5日均線", "🟢 偏多" if ls['Close'] > ls['5MA'] else "🔴 偏空", f"{ls['5MA']:.1f}")
                     sc2.metric("季線扣抵", "🟢 有支撐" if ls['Close'] > ls['60MA_Deduct'] else "🔴 破線", f"{ls['60MA_Deduct']:.1f}")
                     sc3.metric("MACD動能", "🟢 轉強" if ls['MACD_Hist'] > 0 else "🔴 轉弱", f"{ls['MACD_Hist']:.2f}")
                     
-                    # 法人籌碼 (張數)
                     chips = get_stock_chips(clean_ticker)
                     if chips:
                         st.caption(f"📅 法人籌碼最後更新日：{chips['date']}")
@@ -207,8 +219,8 @@ with tab2:
 
 # --- 分頁 3：自選股總表 ---
 with tab3:
-    st.info("請輸入多檔股票代號，用「半形逗號」隔開。")
-    multi_input = st.text_input("自選股清單：", "2330, 2317, 2603, 2352")
+    st.info("請輸入多檔股票代號，用「半形逗號」隔開。不管是上市或上櫃，輸入數字即可！")
+    multi_input = st.text_input("自選股清單：", "2330, 8358, 2317, 3293")
     
     if st.button("執行總表掃描"):
         tickers = [t.strip() for t in multi_input.split(",") if t.strip()]
@@ -216,11 +228,10 @@ with tab3:
         with st.spinner("掃描中，請稍候..."):
             for t in tickers:
                 c_ticker = t.replace(".TWO", "").replace(".TW", "")
-                sym = t if ".TW" in t or ".TWO" in t else f"{t}.TW"
                 name = get_stock_name(c_ticker)
                 try:
-                    df_s = yf.download(sym, period="3mo", progress=False)
-                    if isinstance(df_s.columns, pd.MultiIndex): df_s.columns = df_s.columns.get_level_values(0)
+                    # 🌟 總表一樣套用智慧識別引擎
+                    df_s = get_stock_data_auto(c_ticker, period="3mo")
                     if not df_s.empty:
                         c_price = df_s['Close'].iloc[-1]
                         ma5 = df_s['Close'].rolling(5).mean().iloc[-1]
@@ -229,6 +240,8 @@ with tab3:
                         s_5ma = "🟢 多" if c_price > ma5 else "🔴 空"
                         s_60ma = "🟢 站上" if c_price > ma60 else "🔴 跌破"
                         results.append({"代號": c_ticker, "名稱": name, "收盤價": round(c_price, 1), "短線(5MA)": s_5ma, "生命線(季線)": s_60ma})
+                    else:
+                        results.append({"代號": c_ticker, "名稱": name, "收盤價": "無資料", "短線(5MA)": "-", "生命線(季線)": "-"})
                 except:
                     results.append({"代號": c_ticker, "名稱": name, "收盤價": "錯誤", "短線(5MA)": "-", "生命線(季線)": "-"})
             
