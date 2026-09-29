@@ -6,6 +6,7 @@ import datetime
 import calendar
 import re
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="台股多空戰情室", page_icon="📊", layout="centered")
@@ -23,7 +24,7 @@ st.markdown(
     """, unsafe_allow_html=True
 )
 
-st.title("📊 台股多空戰情室 5.0")
+st.title("📊 台股多空戰情室 5.5")
 
 # ==========================================
 #         通用資料函數
@@ -106,13 +107,34 @@ def get_yahoo_ranking(url):
         soup = BeautifulSoup(res.text, 'html.parser')
         items = soup.find_all('li', class_='List(n)')
         result = []
-        for i, item in enumerate(items[:5]):
-            name = item.find('div', class_='Lh(20px)')
-            if not name: continue
+        count = 0
+        for item in items:
+            name_div = item.find('div', class_='Lh(20px)')
+            if not name_div: continue
+            stock_name = name_div.text.strip()
+            
+            is_etf = False
+            a_tag = item.find('a', href=True)
+            if a_tag:
+                match = re.search(r'/quote/([A-Za-z0-9]+)', a_tag['href'])
+                if match:
+                    ticker = match.group(1)
+                    if ticker.startswith('00') or ticker.startswith('01') or ticker.startswith('02'):
+                        is_etf = True
+            
+            if any(k in stock_name for k in ['元大', '富邦', '國泰', '群益', '復華', '中信', '凱基', '兆豐', '統一', '野村', '期']):
+                is_etf = True
+                
+            if is_etf: continue
+                
             spans = item.find_all('span')
             price = spans[0].text.strip() if len(spans)>0 else ""
             change = spans[1].text.strip() if len(spans)>1 else ""
-            result.append(f"{i+1}. **{name.text.strip()}** ({price} | {change})")
+            
+            count += 1
+            result.append(f"{count}. **{stock_name}** ({price} | {change})")
+            if count >= 5: break
+                
         return "\n".join(result)
     except: return "讀取失敗"
 
@@ -128,11 +150,9 @@ def get_stock_data_auto(ticker, period="6mo"):
     if not df.empty and not df['Close'].isna().all(): return df, f"{clean_ticker}.TWO"
     return pd.DataFrame(), ""
 
-# 🌟 新增：計算台指期結算日
 def get_next_settlement():
     today = datetime.date.today()
     c = calendar.Calendar(firstweekday=calendar.MONDAY)
-    
     def third_wednesday(year, month):
         monthcal = c.monthdatescalendar(year, month)
         wednesdays = [d for week in monthcal for d in week if d.weekday() == 2 and d.month == month]
@@ -142,15 +162,12 @@ def get_next_settlement():
     if today > settle_date:
         y, m = (today.year, today.month + 1) if today.month < 12 else (today.year + 1, 1)
         settle_date = third_wednesday(y, m)
-        
     return settle_date, (settle_date - today).days
 
-# 🌟 新增：獲取個股事件 (營收、股利)
 @st.cache_data(ttl=86400)
 def get_stock_events(ticker, yf_symbol):
     events = []
     try:
-        # 1. 抓取營收
         start_rev = (datetime.datetime.now() - datetime.timedelta(days=90)).strftime('%Y-%m-%d')
         url_rev = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id={ticker}&start_date={start_rev}&token={FINMIND_TOKEN}"
         res_rev = requests.get(url_rev, timeout=5).json()
@@ -159,13 +176,21 @@ def get_stock_events(ticker, yf_symbol):
             if not df_rev.empty:
                 last_rev = df_rev.iloc[-1]
                 rev_mon = last_rev.get('revenue_month', '')
-                yoy = float(last_rev.get('revenue_YearOnYear_ratio', 0))
-                yoy_str = f"📈 年增 {yoy}%" if yoy > 0 else f"📉 年減 {abs(yoy)}%"
+                yoy = None
+                if 'revenue_YearOnYear_ratio' in df_rev.columns and not pd.isna(last_rev['revenue_YearOnYear_ratio']):
+                    yoy = float(last_rev['revenue_YearOnYear_ratio'])
+                else:
+                    rev_now = float(last_rev.get('revenue', 0))
+                    rev_last_year = float(last_rev.get('previous_year_revenue', 0))
+                    if rev_last_year > 0:
+                        yoy = ((rev_now - rev_last_year) / rev_last_year) * 100
+                    else:
+                        yoy = 0.0
+                yoy_str = f"📈 年增 {yoy:.1f}%" if yoy > 0 else f"📉 年減 {abs(yoy):.1f}%"
                 events.append(f"📊 **最新營收 ({rev_mon}月)**：{yoy_str}")
     except: pass
     
     try:
-        # 2. 抓取除息
         yf_ticker = yf.Ticker(yf_symbol)
         divs = yf_ticker.dividends
         if not divs.empty:
@@ -182,7 +207,6 @@ def get_stock_events(ticker, yf_symbol):
 # ==========================================
 tab1, tab2, tab3 = st.tabs(["📊 大盤與雷達", "🏥 個股深度健診", "📋 自選股總表"])
 
-# --- 分頁 1：大盤與雷達 ---
 with tab1:
     try:
         with st.spinner("同步大盤與籌碼資料中..."):
@@ -206,7 +230,6 @@ with tab1:
         
         st.divider()
         
-        # 🌟 大盤與總經事件區
         st.markdown("### 📅 大盤重要事件")
         settle_date, days_left = get_next_settlement()
         if days_left == 0:
@@ -214,24 +237,46 @@ with tab1:
         elif days_left <= 3:
             st.warning(f"⚠️ **台指期即將結算**：{settle_date} (倒數 {days_left} 天)，請密切留意近期外資多空動向。")
         else:
-            st.info(f"⚖️ **下一次台指期結算**：{settle_date} (倒數 {days_left} 天)")
+            st.info(f"⚖ **下一次台指期結算**：{settle_date} (倒數 {days_left} 天)")
             
         if latest['Close'] < latest['60MA_Deduct']: st.error(f"🚨 **破線警報：** 指數低於季線扣抵，請控管資金！")
         elif foreign_oi is not None and foreign_oi <= -90000: st.error(f"🚨 **籌碼警報：** 外資淨空單達 {foreign_oi:,.0f} 口，提防崩跌！")
         else: st.success("✅ **安全區間：** 大盤結構健康。")
         
-        st.markdown("### ⚡ 市場資金雷達 (Yahoo 即時)")
-        r1, r2 = st.columns(2)
-        with r1:
-            st.info("**上市成交量 Top 5**")
-            st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/volume?exchange=TAI'))
-        with r2:
-            st.info("**上櫃成交量 Top 5**")
-            st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/volume?exchange=TWO'))
+        # 🌟 5.5 新增：巢狀分頁的籌碼資金雷達
+        st.markdown("### ⚡ 市場資金與籌碼雷達 (排除 ETF)")
+        rt1, rt2, rt3 = st.tabs(["🔥 爆量人氣榜", "🌍 外資買超榜", "🏦 投信買超榜"])
+        
+        with rt1:
+            r1, r2 = st.columns(2)
+            with r1:
+                st.info("**上市成交量 Top 5**")
+                st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/volume?exchange=TAI'))
+            with r2:
+                st.info("**上櫃成交量 Top 5**")
+                st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/volume?exchange=TWO'))
+                
+        with rt2:
+            r3, r4 = st.columns(2)
+            with r3:
+                st.info("**外資上市買超 Top 5**")
+                st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/foreign-investor-buy?exchange=TAI'))
+            with r4:
+                st.info("**外資上櫃買超 Top 5**")
+                st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/foreign-investor-buy?exchange=TWO'))
+                
+        with rt3:
+            r5, r6 = st.columns(2)
+            with r5:
+                st.info("**投信上市買超 Top 5**")
+                st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/investment-trust-buy?exchange=TAI'))
+            with r6:
+                st.info("**投信上櫃買超 Top 5**")
+                st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/investment-trust-buy?exchange=TWO'))
+
     except Exception as e:
         st.error(f"資料讀取失敗 ({e})")
 
-# --- 分頁 2：個股深度健診 ---
 with tab2:
     user_input = st.text_input("輸入股票代號 (如 2317 或 8358)：", "2330", key="single_stock").strip().upper()
     if user_input:
@@ -243,6 +288,8 @@ with tab2:
                 if sdf.empty: st.warning(f"找不到代號 {clean_ticker} 的資料，請確認代號是否正確。")
                 else:
                     sdf['5MA'] = sdf['Close'].rolling(5).mean()
+                    sdf['10MA'] = sdf['Close'].rolling(10).mean()
+                    sdf['20MA'] = sdf['Close'].rolling(20).mean()
                     sdf['60MA'] = sdf['Close'].rolling(60).mean()
                     sdf['60MA_Deduct'] = sdf['Close'].shift(59)
                     macd = sdf['Close'].ewm(span=12, adjust=False).mean() - sdf['Close'].ewm(span=26, adjust=False).mean()
@@ -251,16 +298,23 @@ with tab2:
                     
                     st.markdown(f"#### {name} ({clean_ticker}) - 收盤：{ls['Close']:,.1f}")
                     
-                    # 🌟 個股事件區
                     events = get_stock_events(clean_ticker, yf_symbol)
                     if events:
                         for ev in events:
                             st.info(ev)
                             
-                    fig = go.Figure(data=[go.Candlestick(x=sdf.index, open=sdf['Open'], high=sdf['High'], low=sdf['Low'], close=sdf['Close'], name='K線')])
-                    fig.add_trace(go.Scatter(x=sdf.index, y=sdf['5MA'], line=dict(color='orange', width=1.5), name='5MA'))
-                    fig.add_trace(go.Scatter(x=sdf.index, y=sdf['60MA'], line=dict(color='blue', width=1.5), name='季線'))
-                    fig.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=10, b=0), height=300)
+                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
+                    
+                    fig.add_trace(go.Candlestick(x=sdf.index, open=sdf['Open'], high=sdf['High'], low=sdf['Low'], close=sdf['Close'], name='K線'), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=sdf.index, y=sdf['5MA'], line=dict(color='orange', width=1.5), name='5MA'), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=sdf.index, y=sdf['10MA'], line=dict(color='purple', width=1.5), name='10MA'), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=sdf.index, y=sdf['20MA'], line=dict(color='green', width=1.5), name='月線(20MA)'), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=sdf.index, y=sdf['60MA'], line=dict(color='blue', width=1.5), name='季線(60MA)'), row=1, col=1)
+                    
+                    v_colors = ['#2ca02c' if c >= o else '#d62728' for c, o in zip(sdf['Close'], sdf['Open'])]
+                    fig.add_trace(go.Bar(x=sdf.index, y=sdf['Volume'], marker_color=v_colors, name='成交量'), row=2, col=1)
+                    
+                    fig.update_layout(xaxis_rangeslider_visible=False, xaxis2_rangeslider_visible=False, margin=dict(l=0, r=0, t=10, b=0), height=450)
                     st.plotly_chart(fig, use_container_width=True)
                     
                     sc1, sc2, sc3 = st.columns(3)
@@ -279,7 +333,6 @@ with tab2:
                         st.caption("目前無最新法人籌碼資料")
         except Exception as e: st.error(f"分析失敗 ({e})")
 
-# --- 分頁 3：自選股總表 ---
 with tab3:
     st.info("請輸入多檔股票代號，用「半形逗號」隔開。不管是上市或上櫃，輸入數字即可！")
     multi_input = st.text_input("自選股清單：", "2330, 8358, 2317, 3293")
