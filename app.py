@@ -24,7 +24,7 @@ st.markdown(
     """, unsafe_allow_html=True
 )
 
-st.title("📊 台股多空戰情室 5.5")
+st.title("📊 台股多空戰情室 5.6")
 
 # ==========================================
 #         通用資料函數
@@ -100,8 +100,9 @@ def get_stock_chips(ticker):
         return {"date": latest_date, "foreign": get_net(f_df), "trust": get_net(t_df), "dealer": get_net(d_df)}
     except: return None
 
+# 🌟 新增：is_chip 參數來抓取法人排行榜的「買賣超張數」
 @st.cache_data(ttl=1800)
-def get_yahoo_ranking(url):
+def get_yahoo_ranking(url, is_chip=False):
     try:
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         soup = BeautifulSoup(res.text, 'html.parser')
@@ -131,8 +132,13 @@ def get_yahoo_ranking(url):
             price = spans[0].text.strip() if len(spans)>0 else ""
             change = spans[1].text.strip() if len(spans)>1 else ""
             
+            # 如果是法人籌碼榜，擷取最後一個 span (通常是買賣超張數)
+            extra_info = ""
+            if is_chip and len(spans) >= 3:
+                extra_info = f" | {spans[-1].text.strip()}"
+            
             count += 1
-            result.append(f"{count}. **{stock_name}** ({price} | {change})")
+            result.append(f"{count}. **{stock_name}** ({price} | {change}{extra_info})")
             if count >= 5: break
                 
         return "\n".join(result)
@@ -243,8 +249,9 @@ with tab1:
         elif foreign_oi is not None and foreign_oi <= -90000: st.error(f"🚨 **籌碼警報：** 外資淨空單達 {foreign_oi:,.0f} 口，提防崩跌！")
         else: st.success("✅ **安全區間：** 大盤結構健康。")
         
-        # 🌟 5.5 新增：巢狀分頁的籌碼資金雷達
         st.markdown("### ⚡ 市場資金與籌碼雷達 (排除 ETF)")
+        # 🌟 加入防呆警語
+        st.caption("⚠️ **註：Yahoo 財經排行榜更新較慢，15:00~18:00 間通常仍顯示「昨日」榜單。**")
         rt1, rt2, rt3 = st.tabs(["🔥 爆量人氣榜", "🌍 外資買超榜", "🏦 投信買超榜"])
         
         with rt1:
@@ -260,19 +267,19 @@ with tab1:
             r3, r4 = st.columns(2)
             with r3:
                 st.info("**外資上市買超 Top 5**")
-                st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/foreign-investor-buy?exchange=TAI'))
+                st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/foreign-investor-buy?exchange=TAI', is_chip=True))
             with r4:
                 st.info("**外資上櫃買超 Top 5**")
-                st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/foreign-investor-buy?exchange=TWO'))
+                st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/foreign-investor-buy?exchange=TWO', is_chip=True))
                 
         with rt3:
             r5, r6 = st.columns(2)
             with r5:
                 st.info("**投信上市買超 Top 5**")
-                st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/investment-trust-buy?exchange=TAI'))
+                st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/investment-trust-buy?exchange=TAI', is_chip=True))
             with r6:
                 st.info("**投信上櫃買超 Top 5**")
-                st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/investment-trust-buy?exchange=TWO'))
+                st.markdown(get_yahoo_ranking('https://tw.stock.yahoo.com/rank/investment-trust-buy?exchange=TWO', is_chip=True))
 
     except Exception as e:
         st.error(f"資料讀取失敗 ({e})")
