@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import requests
 import datetime
+import calendar
 import re
 import plotly.graph_objects as go
 from bs4 import BeautifulSoup
@@ -22,8 +23,11 @@ st.markdown(
     """, unsafe_allow_html=True
 )
 
-st.title("📊 台股多空戰情室")
+st.title("📊 台股多空戰情室 5.0")
 
+# ==========================================
+#         通用資料函數
+# ==========================================
 @st.cache_data(ttl=3600)
 def get_market_data():
     df = yf.download("^TWII", period="1y", progress=False)
@@ -69,30 +73,19 @@ def get_foreign_oi():
 
 @st.cache_data(ttl=3600)
 def get_stock_chips(ticker):
-    """抓取個股三大法人買賣超 (自帶 X光透視鏡版)"""
     try:
         start = (datetime.datetime.now() - datetime.timedelta(days=7)).strftime('%Y-%m-%d')
         url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id={ticker}&start_date={start}&token={FINMIND_TOKEN}"
         data = requests.get(url, timeout=5).json()
-        
         if data.get('msg') != 'success' or not data.get('data'): return None
         df = pd.DataFrame(data['data'])
         latest_date = df['date'].max()
         df_latest = df[df['date'] == latest_date]
         
-        # 1. 自動尋找「法人名稱」的欄位
-        inv_col = None
-        for col in df.columns:
-            if df[col].astype(str).str.contains('外資|外陸資|投信|自營|Foreign|Dealer|Investment', na=False, regex=True).any():
-                inv_col = col
-                break
-        if not inv_col: inv_col = 'name' if 'name' in df.columns else df.columns[-1]
-            
-        # 2. 自動尋找買賣欄位 (加入中英文防呆，應付官方亂改名稱)
+        inv_col = next((c for c in df.columns if df[c].astype(str).str.contains('外資|外陸資|投信|自營|Foreign|Dealer|Investment', na=False, regex=True).any()), 'name' if 'name' in df.columns else df.columns[-1])
         buy_col = next((c for c in df.columns if any(k in c.lower() for k in ['buy', 'long', '買'])), None)
         sell_col = next((c for c in df.columns if any(k in c.lower() for k in ['sell', 'short', '賣'])), None)
         
-        # 3. 寬鬆過濾三大法人
         f_df = df_latest[df_latest[inv_col].astype(str).str.contains('外資|外陸資|Foreign', na=False, regex=True)]
         t_df = df_latest[df_latest[inv_col].astype(str).str.contains('投信|Investment', na=False, regex=True)]
         d_df = df_latest[df_latest[inv_col].astype(str).str.contains('自營|Dealer', na=False, regex=True)]
@@ -103,17 +96,8 @@ def get_stock_chips(ticker):
             s_val = sub_df[sell_col].astype(float).sum() if sell_col and sell_col in sub_df.columns else 0
             return int((b_val - s_val) // 1000)
             
-        return {
-            "date": latest_date, 
-            "foreign": get_net(f_df), 
-            "trust": get_net(t_df), 
-            "dealer": get_net(d_df),
-            # 以下為 X 光除錯資訊
-            "debug_cols": list(df.columns),
-            "debug_names": list(df_latest[inv_col].unique()) if inv_col else []
-        }
-    except Exception as e: 
-        return {"error": str(e)}
+        return {"date": latest_date, "foreign": get_net(f_df), "trust": get_net(t_df), "dealer": get_net(d_df)}
+    except: return None
 
 @st.cache_data(ttl=1800)
 def get_yahoo_ranking(url):
@@ -137,14 +121,68 @@ def get_stock_data_auto(ticker, period="6mo"):
     clean_ticker = ticker.replace(".TWO", "").replace(".TW", "").strip()
     df = yf.download(f"{clean_ticker}.TW", period=period, progress=False)
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-    if not df.empty and not df['Close'].isna().all(): return df
+    if not df.empty and not df['Close'].isna().all(): return df, f"{clean_ticker}.TW"
+    
     df = yf.download(f"{clean_ticker}.TWO", period=period, progress=False)
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-    if not df.empty and not df['Close'].isna().all(): return df
-    return pd.DataFrame()
+    if not df.empty and not df['Close'].isna().all(): return df, f"{clean_ticker}.TWO"
+    return pd.DataFrame(), ""
 
+# 🌟 新增：計算台指期結算日
+def get_next_settlement():
+    today = datetime.date.today()
+    c = calendar.Calendar(firstweekday=calendar.MONDAY)
+    
+    def third_wednesday(year, month):
+        monthcal = c.monthdatescalendar(year, month)
+        wednesdays = [d for week in monthcal for d in week if d.weekday() == 2 and d.month == month]
+        return wednesdays[2] if len(wednesdays) >= 3 else today
+        
+    settle_date = third_wednesday(today.year, today.month)
+    if today > settle_date:
+        y, m = (today.year, today.month + 1) if today.month < 12 else (today.year + 1, 1)
+        settle_date = third_wednesday(y, m)
+        
+    return settle_date, (settle_date - today).days
+
+# 🌟 新增：獲取個股事件 (營收、股利)
+@st.cache_data(ttl=86400)
+def get_stock_events(ticker, yf_symbol):
+    events = []
+    try:
+        # 1. 抓取營收
+        start_rev = (datetime.datetime.now() - datetime.timedelta(days=90)).strftime('%Y-%m-%d')
+        url_rev = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id={ticker}&start_date={start_rev}&token={FINMIND_TOKEN}"
+        res_rev = requests.get(url_rev, timeout=5).json()
+        if res_rev.get('msg') == 'success' and res_rev.get('data'):
+            df_rev = pd.DataFrame(res_rev['data'])
+            if not df_rev.empty:
+                last_rev = df_rev.iloc[-1]
+                rev_mon = last_rev.get('revenue_month', '')
+                yoy = float(last_rev.get('revenue_YearOnYear_ratio', 0))
+                yoy_str = f"📈 年增 {yoy}%" if yoy > 0 else f"📉 年減 {abs(yoy)}%"
+                events.append(f"📊 **最新營收 ({rev_mon}月)**：{yoy_str}")
+    except: pass
+    
+    try:
+        # 2. 抓取除息
+        yf_ticker = yf.Ticker(yf_symbol)
+        divs = yf_ticker.dividends
+        if not divs.empty:
+            last_div_date = divs.index[-1]
+            last_div_amt = divs.iloc[-1]
+            if (pd.Timestamp.now(tz=last_div_date.tz) - last_div_date).days < 365:
+                events.append(f"💰 **最近除息 ({last_div_date.strftime('%Y-%m-%d')})**：發放 {last_div_amt:.2f} 元")
+    except: pass
+    return events
+
+
+# ==========================================
+#         建立三個分頁
+# ==========================================
 tab1, tab2, tab3 = st.tabs(["📊 大盤與雷達", "🏥 個股深度健診", "📋 自選股總表"])
 
+# --- 分頁 1：大盤與雷達 ---
 with tab1:
     try:
         with st.spinner("同步大盤與籌碼資料中..."):
@@ -152,21 +190,36 @@ with tab1:
             latest = df.iloc[-1]
             foreign_oi = get_foreign_oi()
         st.subheader(f"加權指數：{latest['Close']:,.0f}")
+        
         s_bull = (latest['Close'] > latest['5MA']) and (latest['K'] > latest['D'])
         m_bull = (latest['Close'] > latest['60MA']) and (latest['Close'] > latest['60MA_Deduct'])
         c1, c2, c3 = st.columns(3)
         c1.metric("短期(5MA+KD)", "🟢 偏多" if s_bull else "🔴 偏空", f"5MA: {latest['5MA']:,.0f}")
         c2.metric("中期(季線)", "🟢 季線上彎" if m_bull else "🔴 季線下彎", f"扣抵: {latest['60MA_Deduct']:,.0f}")
         c3.metric("波段(MACD)", "🟢 動能強勢" if latest['MACD_Hist'] > 0 else "🔴 動能弱勢", f"值: {latest['MACD']:.0f}")
+        
         st.divider()
         c4, c5 = st.columns(2)
         if foreign_oi is None: c4.metric("外資期指淨未平倉", "讀取中")
         else: c4.metric("外資期指淨未平倉", "🔴 警戒" if foreign_oi <= -90000 else "🟡 偏空" if foreign_oi < 0 else "🟢 偏多", f"{foreign_oi:,.0f} 口")
         c5.metric("大盤量能", "🔥 帶量" if latest['Volume'] > latest['Vol_20MA'] else "❄️ 量縮", "")
+        
         st.divider()
+        
+        # 🌟 大盤與總經事件區
+        st.markdown("### 📅 大盤重要事件")
+        settle_date, days_left = get_next_settlement()
+        if days_left == 0:
+            st.error(f"⚠️ **台指期結算日：就是今天！** 注意尾盤籌碼大換倉引發劇烈波動。")
+        elif days_left <= 3:
+            st.warning(f"⚠️ **台指期即將結算**：{settle_date} (倒數 {days_left} 天)，請密切留意近期外資多空動向。")
+        else:
+            st.info(f"⚖️ **下一次台指期結算**：{settle_date} (倒數 {days_left} 天)")
+            
         if latest['Close'] < latest['60MA_Deduct']: st.error(f"🚨 **破線警報：** 指數低於季線扣抵，請控管資金！")
         elif foreign_oi is not None and foreign_oi <= -90000: st.error(f"🚨 **籌碼警報：** 外資淨空單達 {foreign_oi:,.0f} 口，提防崩跌！")
         else: st.success("✅ **安全區間：** 大盤結構健康。")
+        
         st.markdown("### ⚡ 市場資金雷達 (Yahoo 即時)")
         r1, r2 = st.columns(2)
         with r1:
@@ -178,6 +231,7 @@ with tab1:
     except Exception as e:
         st.error(f"資料讀取失敗 ({e})")
 
+# --- 分頁 2：個股深度健診 ---
 with tab2:
     user_input = st.text_input("輸入股票代號 (如 2317 或 8358)：", "2330", key="single_stock").strip().upper()
     if user_input:
@@ -185,7 +239,7 @@ with tab2:
         try:
             name = get_stock_name(clean_ticker)
             with st.spinner(f"正在分析 {name}..."):
-                sdf = get_stock_data_auto(clean_ticker, period="6mo")
+                sdf, yf_symbol = get_stock_data_auto(clean_ticker, period="6mo")
                 if sdf.empty: st.warning(f"找不到代號 {clean_ticker} 的資料，請確認代號是否正確。")
                 else:
                     sdf['5MA'] = sdf['Close'].rolling(5).mean()
@@ -196,6 +250,13 @@ with tab2:
                     ls = sdf.iloc[-1]
                     
                     st.markdown(f"#### {name} ({clean_ticker}) - 收盤：{ls['Close']:,.1f}")
+                    
+                    # 🌟 個股事件區
+                    events = get_stock_events(clean_ticker, yf_symbol)
+                    if events:
+                        for ev in events:
+                            st.info(ev)
+                            
                     fig = go.Figure(data=[go.Candlestick(x=sdf.index, open=sdf['Open'], high=sdf['High'], low=sdf['Low'], close=sdf['Close'], name='K線')])
                     fig.add_trace(go.Scatter(x=sdf.index, y=sdf['5MA'], line=dict(color='orange', width=1.5), name='5MA'))
                     fig.add_trace(go.Scatter(x=sdf.index, y=sdf['60MA'], line=dict(color='blue', width=1.5), name='季線'))
@@ -209,25 +270,16 @@ with tab2:
                     
                     chips = get_stock_chips(clean_ticker)
                     if chips:
-                        if "error" in chips:
-                            st.error(f"籌碼讀取發生錯誤：{chips['error']}")
-                        else:
-                            st.caption(f"📅 法人籌碼最後更新日：{chips['date']}")
-                            
-                            # 🌟 X光透視鏡：如果全部都是 0，印出除錯資訊！
-                            if chips['foreign'] == 0 and chips['trust'] == 0 and chips['dealer'] == 0:
-                                st.warning("⚠️ 偵測到法人籌碼皆為 0！FinMind 官方可能已更改欄位格式。")
-                                st.error(f"🔍 [透視資料] 欄位名稱: {chips.get('debug_cols')}")
-                                st.error(f"🔍 [透視資料] 法人名稱: {chips.get('debug_names')}")
-                                
-                            fc1, fc2, fc3 = st.columns(3)
-                            fc1.metric("外資", f"🔴 {chips['foreign']} 張" if chips['foreign'] < 0 else f"🟢 +{chips['foreign']} 張")
-                            fc2.metric("投信", f"🔴 {chips['trust']} 張" if chips['trust'] < 0 else f"🟢 +{chips['trust']} 張")
-                            fc3.metric("自營商", f"🔴 {chips['dealer']} 張" if chips['dealer'] < 0 else f"🟢 +{chips['dealer']} 張")
+                        st.caption(f"📅 法人籌碼最後更新日：{chips['date']}")
+                        fc1, fc2, fc3 = st.columns(3)
+                        fc1.metric("外資", f"🔴 {chips['foreign']} 張" if chips['foreign'] < 0 else f"🟢 +{chips['foreign']} 張")
+                        fc2.metric("投信", f"🔴 {chips['trust']} 張" if chips['trust'] < 0 else f"🟢 +{chips['trust']} 張")
+                        fc3.metric("自營商", f"🔴 {chips['dealer']} 張" if chips['dealer'] < 0 else f"🟢 +{chips['dealer']} 張")
                     else:
                         st.caption("目前無最新法人籌碼資料")
         except Exception as e: st.error(f"分析失敗 ({e})")
 
+# --- 分頁 3：自選股總表 ---
 with tab3:
     st.info("請輸入多檔股票代號，用「半形逗號」隔開。不管是上市或上櫃，輸入數字即可！")
     multi_input = st.text_input("自選股清單：", "2330, 8358, 2317, 3293")
@@ -239,7 +291,7 @@ with tab3:
                 c_ticker = t.replace(".TWO", "").replace(".TW", "")
                 name = get_stock_name(c_ticker)
                 try:
-                    df_s = get_stock_data_auto(c_ticker, period="3mo")
+                    df_s, _ = get_stock_data_auto(c_ticker, period="3mo")
                     if not df_s.empty:
                         c_price = df_s['Close'].iloc[-1]
                         ma5 = df_s['Close'].rolling(5).mean().iloc[-1]
